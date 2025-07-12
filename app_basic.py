@@ -127,10 +127,27 @@ if aba == "Síntese":
     if st.button("Gerar Áudio"):
         with st.spinner("Gerando áudio..."):
             tts = TTS(modelo, gpu=usa_gpu)
-            agora = datetime.now().strftime("%d-%m-%Y_%H-%M")
-            nome_base = f"{idioma.replace(' ', '_').lower()}_{agora}"
+            # Novo padrão: nome do perfil/modelo selecionado + lingua + data_hora
+            lang_map_ext = {
+                'Português': 'pt_br',
+                'Inglês': 'en_us',
+                'Espanhol': 'es_es',
+                'Alemão': 'de_de',
+                'Francês': 'fr_fr',
+                'Chinês': 'zh_cn',
+                'Holandês': 'nl_nl',
+                'YourTTS (multi)': 'multi',
+            }
+            idioma_ext = lang_map_ext.get(idioma, 'xx')
+            if perfil_ativo and perfil_ativo.get('nome'):
+                nome_perfil_voz = perfil_ativo['nome'].replace(' ', '_')
+            else:
+                nome_perfil_voz = idioma.replace(' ', '_').lower()
+            agora_br = datetime.now().strftime("%d-%m-%Y_%H-%M")
+            nome_base = f"{nome_perfil_voz}_{idioma_ext}_{agora_br}"
             saida_wav = os.path.join(pasta_padrao, nome_base + ".wav")
             saida_final = os.path.join(pasta_padrao, f"{nome_base}.{formato_saida}")
+            srt_path = os.path.join(pasta_padrao, f"{nome_base}.srt")
             referencia_path = None
             temp_wav_to_remove = None
             if audio_file is not None:
@@ -190,7 +207,6 @@ if aba == "Síntese":
             else:
                 saida_final = saida_wav
             # Geração do SRT simples
-            srt_path = os.path.join(pasta_padrao, f"{nome_base}.srt")
             with open(srt_path, "w", encoding="utf-8") as srt:
                 srt.write("1\n00:00:00,000 --> 00:00:10,000\n" + texto.strip() + "\n")
             # Download dos arquivos
@@ -209,15 +225,19 @@ if aba == "Síntese":
                 os.remove(referencia_path)
             # Salvar perfil/modelo de voz se nome foi informado
             if nome_perfil.strip() and referencia_path:
-                # NOVO: salvar referência em pasta permanente
                 pasta_perfis = os.path.join('Modelos', 'perfis')
                 os.makedirs(pasta_perfis, exist_ok=True)
-                # Gera nome único para o arquivo de referência
-                nome_audio_perfil = f"{nome_perfil.strip().replace(' ', '_')}_{agora}.wav"
+                nome_audio_perfil = f"{nome_perfil.strip().replace(' ', '_')}_{agora_br}.wav"
                 caminho_audio_permanente = os.path.join(pasta_perfis, nome_audio_perfil)
-                # Copia o arquivo de referência para a pasta permanente
                 try:
-                    AudioSegment.from_file(referencia_path).export(caminho_audio_permanente, format="wav")
+                    # Se referencia_path for temporário, copie antes de remover
+                    if audio_file is not None:
+                        # Lê os bytes do arquivo de upload uma única vez
+                        audio_bytes = audio_file.getvalue() if hasattr(audio_file, 'getvalue') else audio_file.read()
+                        with open(caminho_audio_permanente, 'wb') as f:
+                            f.write(audio_bytes)
+                    else:
+                        AudioSegment.from_file(referencia_path).export(caminho_audio_permanente, format="wav")
                 except Exception as e:
                     st.error(f"Erro ao salvar áudio de referência permanente: {e}")
                     caminho_audio_permanente = referencia_path  # fallback
@@ -228,10 +248,13 @@ if aba == "Síntese":
                     "caminho_audio": caminho_audio_permanente,
                     "modelo": modelo,
                     "idioma": idioma,
-                    "data": agora
+                    "data": agora_br
                 })
                 salvar_perfis(perfis)
                 st.success(f"Perfil/modelo '{nome_perfil.strip()}' salvo!")
+
+    # --- REMOVIDO: Gravação de voz em tempo real (não há biblioteca estável disponível) ---
+    # (mantém apenas upload de áudio)
 
     st.markdown("---")
     st.markdown("""
@@ -251,7 +274,8 @@ elif aba == "Modelos":
     if not perfis:
         st.info("Nenhum perfil/modelo salvo ainda.")
     else:
-        for perfil in perfis:
+        indices_para_excluir = []
+        for i, perfil in enumerate(perfis):
             st.markdown(f"**Nome:** {perfil['nome']}")
             st.markdown(f"**Gênero:** {perfil['genero']}")
             st.markdown(f"**Modelo:** {perfil['modelo']}")
@@ -259,4 +283,21 @@ elif aba == "Modelos":
             st.markdown(f"**Data:** {perfil['data']}")
             if os.path.exists(perfil['caminho_audio']):
                 st.audio(perfil['caminho_audio'], format="audio/wav")
-            st.markdown("---") 
+            # Botão de exclusão com alerta
+            if st.button(f"Excluir perfil: {perfil['nome']} ({perfil['genero']})", key=f"excluir_{i}"):
+                if st.warning(f"Tem certeza que deseja excluir o perfil '{perfil['nome']}'? Esta ação não pode ser desfeita.", icon="⚠️") or True:
+                    indices_para_excluir.append(i)
+            st.markdown("---")
+        # Excluir perfis após confirmação
+        if indices_para_excluir:
+            for idx in sorted(indices_para_excluir, reverse=True):
+                perfil = perfis[idx]
+                # Remover arquivo de áudio permanente, se existir
+                if os.path.exists(perfil['caminho_audio']):
+                    try:
+                        os.remove(perfil['caminho_audio'])
+                    except Exception as e:
+                        st.warning(f"Não foi possível remover o áudio: {e}")
+                del perfis[idx]
+            salvar_perfis(perfis)
+            st.success("Perfil/modelo excluído com sucesso!") 
